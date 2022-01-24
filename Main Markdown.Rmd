@@ -1,0 +1,257 @@
+---
+title: 'National Excess Mortality from Sub-National data: Method and Application for
+  Argentina'
+author: "Ariel Karlinsky"
+output:
+  html_document:
+    theme: cerulean
+    toc: yes
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+pacman::p_load(tidyverse, lubridate, glue, scales, survey, patchwork,
+               install = FALSE, update = FALSE)
+
+ggplottheme <- theme_classic() + 
+    theme(
+          panel.grid.major.x = element_blank(), 
+          panel.grid.major.y = element_line(color = "#cbcbcb"),
+          panel.grid.minor.x = element_blank(),
+          panel.background = element_rect(fill = "transparent",colour = NA),
+          plot.background = element_rect(fill = "white",colour = NA),
+          plot.title = element_text(hjust = 0),
+          plot.title.position = "plot",
+          plot.caption.position = "plot",
+          plot.subtitle = element_text(hjust = 0),
+          #axis.ticks = element_blank(),
+          strip.background = element_blank()
+    )
+
+theme_set(ggplottheme)
+
+Sys.setlocale("LC_ALL","English")
+
+```
+
+# Introduction
+Main markdown for paper `National Excess Mortality from Sub-National data: Method and illustration for Argentina`.
+Using publicly available data on reported COVID-19 mortality and all-cause mortality in Argentina and Argentinian provinces,
+We derive a method to project national all-cause and excess mortality from sub-national data from the province of Cordoba.
+
+# Data
+Reported COVID-19 deaths by province and date:
+```{r}
+covid_by_province <- read_csv("Data/covid_deaths_by_province_date.csv")
+```
+
+All-Cause mortality data:
+```{r}
+acm_data <- read_csv("Data/acm_data.csv")
+```
+Expected monthly number of deaths in Argentina from World Mortality Dataset:
+```{r}
+argentina_pred_acm <- read_csv("https://raw.githubusercontent.com/dkobak/excess-mortality/main/baselines.csv",
+                           col_names = c("country_name","month","pred_deaths")) %>% 
+  filter(country_name  == "Argentina")
+
+```
+
+Argentina reported COVID to WHO:
+```{r}
+who_covid_data_argentina <- read_csv("Data/who_covid_data_argentina.csv")
+
+```
+
+
+
+# Analsyis
+Declare `acm_data` as `survey design` to implement the ratio estimator from `survey` package:
+```{r}
+acm_data_svy <- svydesign(data=acm_data %>% 
+                                   filter(year %in% c(2019,2020)), 
+                                 ids = ~1)
+```
+
+estimate ratio of deaths in Cordoba to Argentina, total:
+```{r}
+acm_ratio <- svyratio(~deaths_cor, ~deaths_arg, 
+                         design = acm_data_svy, 
+                         na.rm=TRUE)
+
+acm_ratio_mean <- acm_ratio$ratio
+acm_ratio_ci <- confint(acm_ratio, df = degf(acm_data_svy))
+acm_ratio_lb <- acm_ratio_ci[1]
+acm_ratio_ub <- acm_ratio_ci[2]
+
+acm_ratio_mean
+acm_ratio_ci
+```
+
+By year:
+```{r}
+acm_data_svy_2019 <- svydesign(data=acm_data %>% 
+                                   filter(year %in% c(2019)), 
+                                 ids = ~1)
+
+acm_ratio_2019 <- svyratio(~deaths_cor, ~deaths_arg, 
+                         design = acm_data_svy_2019, 
+                         na.rm=TRUE)
+acm_ratio_2019 
+
+acm_data_svy_2020 <- svydesign(data=acm_data %>% 
+                                   filter(year %in% c(2020)), 
+                                 ids = ~1)
+
+acm_ratio_2020 <- svyratio(~deaths_cor, ~deaths_arg,  
+                         design = acm_data_svy_2020, 
+                         na.rm=TRUE)
+acm_ratio_2020 
+```
+
+Create a new dataframe that contains the obsreved number of deaths in 
+Argentina and Cordoba and the projection from Cordoba, 
+merges with the expected number of deaths and derives estimates of excess.
+```{r}
+acm_proj <- acm_data %>% 
+  left_join(argentina_pred_acm, by = "month") %>% 
+  mutate(pred_deaths = if_else(year < 2020, NA_real_, pred_deaths),
+         deaths_proj_acm = deaths_cor * (1/acm_ratio_mean),
+         deaths_proj_ub = deaths_cor * (1/acm_ratio_lb),
+         deaths_proj_lb = deaths_cor * (1/acm_ratio_ub),
+         excess_deaths = deaths_proj_acm - pred_deaths,
+         excess_deaths_ub = deaths_proj_ub - pred_deaths,
+         excess_deaths_lb = deaths_proj_lb - pred_deaths,
+         date = ym(glue("{year}-{month}"))) 
+
+```
+
+Compute total excess from March 2020 up to end of 2021 
+```{r}
+total_excess <- acm_proj %>% 
+  filter(date >= "2020-03-01") %>% 
+  summarise(total_excess = sum(excess_deaths),
+            total_excess_lb = sum(excess_deaths_lb),
+            total_excess_ub = sum(excess_deaths_ub)) %>% 
+  relocate(total_excess_lb)
+
+total_excess
+```
+
+Compare to reported COVID-19:
+```{r}
+who_total_covid_deaths <- who_covid_data_argentina %>% 
+  filter(date == "2021-12-31") %>% 
+  select(country, date, covid_deaths) %>% 
+  pull(covid_deaths)
+
+who_total_covid_deaths
+```
+COVID-19 undercount:
+```{r}
+undercount <- total_excess$total_excess / who_total_covid_deaths
+
+undercount
+```
+
+
+
+# Plots
+
+## Figure 1
+Left panel: share of ACM between Cordoba and National:
+```{r}
+plot_death_shares <- acm_data %>% 
+  filter(!is.na(deaths_ratio)) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = date, y = deaths_ratio)) + 
+  geom_col(fill = "dodgerblue1") +
+  geom_hline(yintercept = acm_ratio_mean,
+             linetype = "dashed") +
+  scale_x_date(breaks = seq(as.Date("2019-01-01"), as.Date("2020-12-31"), by="2 months"), 
+                labels = function(x) if_else(is.na(lag(x)) | !year(lag(x)) == year(x), 
+                                             paste(month(x, label = TRUE), "\n", year(x)), 
+                                             paste(month(x, label = TRUE))),
+                expand = expansion(0.01)) +
+  scale_y_continuous(labels = percent, expand = expansion(mult = c(0,0.10)),
+                     breaks = seq(from = 0, to = 0.1, by = 0.025)) +
+  annotate(geom="text", label=percent(acm_ratio_mean, accuracy = 0.1), 
+           x=as.Date("2019-01-15"), 
+           y=acm_ratio_mean, vjust=-0.5, hjust = 0.25) +
+  labs(#title = "Monthly Ratio between Deaths in Córdoba Province to Total Deaths in Argentina",
+       y = "Ratio between deaths in Córdoba to Argentina",
+       x = "Month") +
+  theme(axis.title = element_text(size = 10))
+```
+
+
+Right panel: Cordoba vs not Cordoba - daily COVID deaths
+```{r}
+plot_covid_province <- covid_by_province %>% 
+  mutate(cordoba = if_else(residencia_provincia_nombre == "Córdoba", "Córdoba", "Rest of Argentina")) %>% 
+  group_by(cordoba, fecha_fallecimiento) %>% 
+  filter(fecha_fallecimiento < "2022-01-01") %>% 
+  filter(fecha_fallecimiento > "2020-03-01") %>% 
+  summarise(covid_deaths = sum(n)) %>%
+  group_by(cordoba) %>% 
+  mutate(ma7 = zoo::rollmean(covid_deaths, k = 7, align = "right", na.pad=TRUE)) %>% 
+  ggplot(aes(x= fecha_fallecimiento, y = ma7)) + 
+  geom_vline(xintercept = as.Date("2021-01-01"), 
+             linetype = "dashed") +
+  geom_line(color = "firebrick1", size = 1) + 
+  facet_wrap(~cordoba, scales = "free_y", ncol = 1) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  scale_x_date(breaks = breaks_pretty(n = 10),
+               date_labels = "%m-%y") +
+  labs(#title = "COVID Deaths in Argentina by Province",
+       y = "Daily COVID Deaths (7-day Moving Average)",
+       x = "Day") +
+  theme(axis.title = element_text(size = 10))
+
+```
+
+Figure 1:
+```{r fig.align="center"}
+plot_death_shares + plot_covid_province + plot_annotation(tag_levels = "A")
+
+ggsave("figure1.png", 
+       width = 180, units = "mm", dpi = 500)
+```
+
+## Figure 2
+```{r fig.align="center"}
+colors <- c("Projection from Córdoba" = "dodgerblue1", 
+            "Argentina" = "red", 
+            "Expected Mortality" = "black")
+
+
+acm_proj %>% 
+  filter(year >= 2019) %>% 
+  ggplot(aes(x = date, y = deaths_arg)) +
+    geom_line(data = . %>% filter(year >= 2020), 
+            aes(y = pred_deaths), color = "black", size = 1, alpha = 0.8) +
+  geom_line(size = 1, aes(color = "Argentina"), alpha = 0.9) +
+  geom_line(aes(y = deaths_proj_acm), color = "dodgerblue1", size = 1, alpha = 0.9) +
+  geom_ribbon(aes(ymin = deaths_proj_lb, ymax = deaths_proj_ub, 
+                  y = deaths_proj_acm), 
+              alpha = 0.25, fill = "dodgerblue1") +
+  scale_x_date(date_breaks = "2 months", 
+                labels = function(x) if_else(is.na(lag(x)) | !year(lag(x)) == year(x), 
+                                             paste(month(x, label = TRUE), "\n", year(x)), 
+                                             paste(month(x, label = TRUE))),
+                expand = expansion(0.05)) +  
+  scale_y_continuous(labels = comma, breaks = breaks_pretty(n = 6)) +
+  scale_color_manual(values = colors) + 
+  labs(#title = "Monthly Deaths in Argentina 2019-2021", 
+       y = "Monthly Deaths", 
+       x = "Month",
+       color = NULL) +
+  theme(legend.position = "top")
+
+ggsave("figure2.png", width = 180, units = "mm", dpi = 500)
+```
+
+
+
