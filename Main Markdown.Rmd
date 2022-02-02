@@ -161,7 +161,7 @@ undercount
 # Plots
 
 ## Figure 1
-Left panel: share of ACM between Cordoba and National:
+Left panel: Share of ACM between Cordoba and National:
 ```{r}
 plot_death_shares <- acm_data %>% 
   filter(!is.na(deaths_ratio)) %>% 
@@ -188,6 +188,7 @@ plot_death_shares <- acm_data %>%
 
 
 Right panel: Cordoba vs not Cordoba - daily COVID deaths
+
 ```{r}
 plot_covid_province <- covid_by_province %>% 
   mutate(cordoba = if_else(residencia_provincia_nombre == "Córdoba", "Córdoba", "Rest of Argentina")) %>% 
