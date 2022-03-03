@@ -49,7 +49,8 @@ covid_by_province <- read_csv("Data/covid_deaths_by_province_date.csv")
 
 All-Cause mortality data:
 ```{r}
-acm_data <- read_csv("Data/acm_data.csv")
+acm_data <- read_csv("Data/acm_data.csv") %>% 
+  mutate(date = dmy(date))
 ```
 Expected monthly number of deaths in Argentina from World Mortality Dataset:
 ```{r}
@@ -111,7 +112,7 @@ acm_ratio_2020 <- svyratio(~deaths_cor, ~deaths_arg,
 acm_ratio_2020 
 ```
 
-Create a new dataframe that contains the obsreved number of deaths in 
+Create a new dataframe that contains the observed number of deaths in 
 Argentina and Cordoba and the projection from Cordoba, 
 merges with the expected number of deaths and derives estimates of excess.
 ```{r}
@@ -127,6 +128,17 @@ acm_proj <- acm_data %>%
          date = ym(glue("{year}-{month}"))) 
 
 ```
+
+Compute Pearson Correlation Coefficient between projected number of deaths and registered:
+```{r}
+corr_proj_deaths <- acm_proj %>% 
+  filter(between(year, 2019, 2020)) %>% 
+  summarise(r = cor(deaths_proj_acm, deaths_arg)) %>% 
+  as.numeric()
+
+corr_proj_deaths
+```
+
 
 Compute total excess from March 2020 up to end of 2021 
 ```{r}
@@ -183,7 +195,10 @@ plot_death_shares <- acm_data %>%
   labs(#title = "Monthly Ratio between Deaths in Córdoba Province to Total Deaths in Argentina",
        y = "Ratio between deaths in Córdoba to Argentina",
        x = "Month") +
-  theme(axis.title = element_text(size = 10))
+  theme(axis.title = element_text(size = 9.5),
+        axis.text.x = element_text(size = 8))
+
+plot_death_shares
 ```
 
 
@@ -203,13 +218,20 @@ plot_covid_province <- covid_by_province %>%
              linetype = "dashed") +
   geom_line(color = "firebrick1", size = 1) + 
   facet_wrap(~cordoba, scales = "free_y", ncol = 1) +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
-  scale_x_date(breaks = breaks_pretty(n = 10),
-               date_labels = "%m-%y") +
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0.1))) +
+  # scale_x_date(breaks = breaks_pretty(n = 10),
+  #              date_labels = "%m-%y") +
+    scale_x_date(breaks = seq(as.Date("2020-03-01"), as.Date("2021-12-31"), by="2 months"), 
+                labels = function(x) if_else(is.na(lag(x)) | !year(lag(x)) == year(x), 
+                                             paste(month(x, label = TRUE), "\n", year(x)), 
+                                             paste(month(x, label = TRUE))),
+                expand = expansion(0.01)) +
   labs(#title = "COVID Deaths in Argentina by Province",
-       y = "Daily COVID Deaths (7-day Moving Average)",
+       y = "Daily COVID-19 deaths (7-day moving average)",
        x = "Day") +
-  theme(axis.title = element_text(size = 10))
+  coord_cartesian(clip = "off") +
+  theme(axis.title = element_text(size = 9.5),
+        axis.text.x = element_text(size = 8))
 
 ```
 
@@ -225,7 +247,7 @@ ggsave("figure1.png",
 ```{r fig.align="center"}
 colors <- c("Projection from Córdoba" = "dodgerblue1", 
             "Argentina" = "red", 
-            "Expected Mortality" = "black")
+            "Expected mortality" = "black")
 
 
 acm_proj %>% 
@@ -246,7 +268,7 @@ acm_proj %>%
   scale_y_continuous(labels = comma, breaks = breaks_pretty(n = 6)) +
   scale_color_manual(values = colors) + 
   labs(#title = "Monthly Deaths in Argentina 2019-2021", 
-       y = "Monthly Deaths", 
+       y = "Monthly deaths", 
        x = "Month",
        color = NULL) +
   theme(legend.position = "top")
